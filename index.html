@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Monitor de Notas · WhatsApp</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- LOGIN -->
+<main id="tela-login" class="login" hidden>
+  <form id="form-login" class="card login-card" autocomplete="on">
+    <h1>Monitor de Notas</h1>
+    <p class="muted">Entre com o e-mail e a senha do seu usuário.</p>
+    <label>E-mail<input type="email" id="login-email" required autocomplete="username"></label>
+    <label>Senha<input type="password" id="login-senha" required autocomplete="current-password"></label>
+    <button class="btn primary" type="submit">Entrar</button>
+    <button class="btn ghost" type="button" id="btn-esqueci">Esqueci minha senha</button>
+    <p id="login-erro" class="erro" role="alert"></p>
+  </form>
+
+  <form id="form-reset" class="card login-card" hidden>
+    <h1>Redefinir senha</h1>
+    <p class="muted">Informe o e-mail do seu usuário. Enviaremos um link para criar uma nova senha.</p>
+    <label>E-mail<input type="email" id="reset-email" required autocomplete="username"></label>
+    <button class="btn primary" type="submit" id="btn-enviar-reset">Enviar link</button>
+    <button class="btn ghost" type="button" id="btn-voltar-login">Voltar ao login</button>
+    <p id="reset-msg" class="erro" role="status"></p>
+  </form>
+
+  <form id="form-nova-senha" class="card login-card" hidden>
+    <h1>Criar nova senha</h1>
+    <label>Nova senha (mínimo 8 caracteres)<input type="password" id="nova-senha" minlength="8" required autocomplete="new-password"></label>
+    <label>Repita a nova senha<input type="password" id="nova-senha2" minlength="8" required autocomplete="new-password"></label>
+    <button class="btn primary" type="submit">Salvar nova senha</button>
+    <p id="nova-msg" class="erro" role="alert"></p>
+  </form>
+</main>
+
+<!-- APP -->
+<div id="tela-app" hidden>
+  <header class="topo">
+    <div class="topo-esq">
+      <strong class="marca">Monitor de Notas</strong>
+      <span id="pill-status" class="pill off">carregando…</span>
+      <span id="txt-grupo" class="muted small"></span>
+    </div>
+    <div class="topo-dir">
+      <span id="txt-usuario" class="muted small"></span>
+      <button class="btn ghost" id="btn-sair">Sair</button>
+    </div>
+  </header>
+
+  <section class="barra-exec card">
+    <div class="exec-bloco">
+      <span class="rotulo">Funcionamento</span>
+      <div class="seg" id="seg-modo">
+        <button data-modo="horario">Só dentro do horário</button>
+        <button data-modo="sempre">Sempre ligado</button>
+        <button data-modo="parado">Parado</button>
+      </div>
+    </div>
+    <div class="exec-bloco">
+      <span class="rotulo">Horário</span>
+      <label class="inline">das <input type="number" id="hor-inicio" min="0" max="23" class="num"> h</label>
+      <label class="inline">às <input type="number" id="hor-fim" min="0" max="23" class="num"> h</label>
+      <button class="btn" id="btn-salvar-exec">Salvar</button>
+      <span id="msg-exec" class="muted small"></span>
+    </div>
+  </section>
+
+  <nav class="abas" id="abas">
+    <button data-aba="revisao" class="ativa">Revisão <span class="badge" id="badge-revisao">0</span></button>
+    <button data-aba="notas">Notas</button>
+    <button data-aba="tempo">Tempo</button>
+    <button data-aba="whatsapp">WhatsApp e grupo</button>
+    <button data-aba="vendedores">Vendedores</button>
+    <button data-aba="log">Registro</button>
+  </nav>
+
+  <!-- REVISÃO -->
+  <section id="aba-revisao" class="aba">
+    <div class="duas-col">
+      <div class="card lista-col">
+        <div class="lista-topo"><strong>Para ajustar</strong><span id="rev-contagem" class="muted small"></span></div>
+        <div id="rev-lista" class="lista"></div>
+      </div>
+      <div class="card" id="rev-detalhe"><p class="muted">Escolha uma nota na lista para ver a foto e corrigir os dados.</p></div>
+    </div>
+  </section>
+
+  <!-- NOTAS -->
+  <section id="aba-notas" class="aba" hidden>
+    <div class="card filtros">
+      <label>De<input type="date" id="f-de"></label>
+      <label>Até<input type="date" id="f-ate"></label>
+      <label>Status
+        <select id="f-status"><option value="">Todos</option><option>SUCESSO</option><option>REVISAO_HUMANA</option><option>ERRO</option><option>CORRIGIDO</option><option>DESCARTADO</option></select>
+      </label>
+      <label>Loja<select id="f-loja"><option value="">Todas</option></select></label>
+      <label class="grande">Buscar<input type="search" id="f-busca" placeholder="nome, CPF, celular ou vendedor"></label>
+      <button class="btn" id="btn-filtrar">Atualizar</button>
+      <button class="btn primary" id="btn-cadastrar-todas" title="Coloca na fila de cadastro as notas corrigidas que ainda não foram enviadas">Cadastrar corrigidas</button>
+      <button class="btn ghost" id="btn-csv">Baixar CSV</button>
+    </div>
+    <div class="card tabela-wrap">
+      <table class="tabela" id="tab-notas">
+        <thead><tr><th>Hora</th><th>Loja</th><th>Nome</th><th>CPF</th><th>Celular</th><th>Grupo</th><th>Vendedor</th><th>Status</th><th>Envio</th><th class="dir">Tempo</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="notas-rodape" class="muted small pad"></p>
+    </div>
+    <dialog id="dlg-edicao"><div id="dlg-corpo"></div></dialog>
+  </section>
+
+  <!-- TEMPO -->
+  <section id="aba-tempo" class="aba" hidden>
+    <div class="card filtros">
+      <label>Dia<input type="date" id="t-dia"></label>
+      <button class="btn" id="btn-tempo">Atualizar</button>
+      <span class="muted small">Tempo = da mensagem no WhatsApp até a nota ficar cadastrada.</span>
+    </div>
+    <div class="cartoes" id="t-cartoes"></div>
+    <div class="card"><h3>Notas por hora</h3><div id="t-grafico"></div></div>
+    <div class="duas-col eq">
+      <div class="card tabela-wrap"><h3>Por hora</h3><table class="tabela" id="t-horas"><thead><tr><th>Hora</th><th class="dir">Notas</th><th class="dir">Média</th><th class="dir">Mediana</th><th class="dir">Máx.</th></tr></thead><tbody></tbody></table></div>
+      <div class="card tabela-wrap"><h3>Por loja</h3><table class="tabela" id="t-lojas"><thead><tr><th>Loja</th><th class="dir">Notas</th><th class="dir">Média</th><th class="dir">Mediana</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- WHATSAPP -->
+  <section id="aba-whatsapp" class="aba" hidden>
+    <div class="grade">
+      <div class="card" id="card-conexao">
+        <h3>Conexão</h3>
+        <div id="conexao-corpo"></div>
+      </div>
+
+      <div class="card">
+        <h3>Grupo monitorado</h3>
+        <label>ID do grupo<input id="g-id" placeholder="1203…@g.us"></label>
+        <label>Nome (só para você)<input id="g-nome"></label>
+        <div class="linha"><button class="btn primary" id="btn-salvar-grupo">Salvar grupo</button><span id="msg-grupo" class="muted small"></span></div>
+        <p class="muted small">Não sabe o ID? Use “Listar meus grupos” ou o teste de monitoramento abaixo.</p>
+      </div>
+
+      <div class="card larga">
+        <h3>Descobrir o ID do grupo</h3>
+        <div class="linha quebra">
+          <button class="btn" id="btn-listar">Listar meus grupos</button>
+          <span class="muted small">ou</span>
+          <select id="teste-seg"><option value="60">1 min</option><option value="120" selected>2 min</option><option value="300">5 min</option></select>
+          <button class="btn" id="btn-teste">Iniciar teste de monitoramento</button>
+        </div>
+        <p class="muted small">No teste, o robô escuta <b>todos</b> os grupos pelo tempo escolhido e conta as mensagens. Peça para alguém escrever no grupo desejado: ele aparece abaixo com o ID.</p>
+        <div class="tabela-wrap"><table class="tabela" id="tab-grupos"><thead><tr><th>Grupo</th><th>ID</th><th class="dir">Pessoas</th><th class="dir">Msgs no teste</th><th></th></tr></thead><tbody></tbody></table></div>
+        <div id="cmd-lista" class="cmds"></div>
+      </div>
+
+      <div class="card larga">
+        <h3>Janela do WhatsApp</h3>
+        <div class="linha quebra">
+          <label class="check"><input type="checkbox" id="chk-janela"> Abrir a janela do WhatsApp no computador do robô</label>
+          <label class="check"><input type="checkbox" id="chk-espelho"> Ver a tela do WhatsApp aqui, ao vivo</label>
+          <button class="btn" id="btn-captura">Atualizar imagem agora</button>
+        </div>
+        <p class="muted small">Abrir/fechar a janela reinicia a leitura por cerca de 30 s (a conexão do WhatsApp é mantida). A imagem ao vivo atualiza a cada ~5 s e mostra as conversas; fica visível só para quem está logado.</p>
+        <div id="espelho-box" class="espelho" hidden><img id="espelho-img" alt="Tela do WhatsApp"><div id="espelho-info" class="muted small"></div></div>
+      </div>
+
+      <div class="card larga">
+        <h3>Reprocessar</h3>
+        <div class="linha quebra">
+          <label class="inline">Notas ainda não lidas desde as <input id="rp-hora" type="time" value="09:00"></label>
+          <select id="rp-dia"><option value="0">de hoje</option><option value="1">de ontem</option></select>
+          <button class="btn" id="btn-rp-pend">Reprocessar pendentes</button>
+          <button class="btn" id="btn-rp-erros">Reprocessar erros</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- VENDEDORES -->
+  <section id="aba-vendedores" class="aba" hidden>
+    <div class="card tabela-wrap">
+      <table class="tabela" id="tab-vend">
+        <thead><tr><th>Nome</th><th>Apelidos</th><th>Loja principal</th><th>Todas</th><th>Visita outras</th><th>WhatsApp (vínculo)</th><th>Ativo</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="pad linha"><button class="btn" id="btn-novo-vend">+ Novo vendedor</button><span id="msg-vend" class="muted small"></span></div>
+      <p class="muted small pad">O número do WhatsApp é vinculado sozinho na primeira vez que o nome do contato bater com o cadastro. “Visita outras” indica quem também aparece em outras lojas: nesses casos o robô não presume a loja pelo vendedor.</p>
+    </div>
+  </section>
+
+  <!-- LOG -->
+  <section id="aba-log" class="aba" hidden>
+    <div class="card"><div id="log-lista" class="logbox"></div></div>
+  </section>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
