@@ -130,6 +130,7 @@ async function entrarNoApp(user) {
     return;
   }
   S.status = data;
+  S.superAdmin = await verificarSuperAdmin();   // só SUPER_ADMIN vê "Conta do WhatsApp"
   $('#tela-login').hidden = true; $('#tela-app').hidden = false;
   $('#txt-usuario').textContent = user.email;
   await Promise.all([carregarLojas(), carregarConfig(), carregarVendedores(), carregarGrupos(), carregarComandos(), carregarLogs()]);
@@ -537,7 +538,7 @@ $('#btn-rp-pend').addEventListener('click', () => enviarComando('reprocessar_pen
 $('#btn-rp-erros').addEventListener('click', () => enviarComando('reprocessar_erros'));
 $('#btn-captura').addEventListener('click', () => enviarComando('captura_tela'));
 function renderComandos() {
-  const nome = { descobrir_grupos: 'Listar grupos', teste_monitoramento: 'Teste de monitoramento', reprocessar_pendencias: 'Reprocessar pendentes', reprocessar_erros: 'Reprocessar erros', captura_tela: 'Captura de tela', reiniciar: 'Reiniciar' };
+  const nome = { descobrir_grupos: 'Listar grupos', teste_monitoramento: 'Teste de monitoramento', reprocessar_pendencias: 'Reprocessar pendentes', reprocessar_erros: 'Reprocessar erros', captura_tela: 'Captura de tela', reiniciar: 'Reiniciar', trocar_conta: 'Conectar outra conta', restaurar_conta: 'Voltar à conta anterior' };
   $('#cmd-lista').innerHTML = S.comandos.map(c => `<div class="cmd"><span class="tag ${c.status === 'erro' ? 'ERRO' : c.status === 'ok' ? 'SUCESSO' : 'REVISAO_HUMANA'}">${esc(c.status)}</span>
     <span>${esc(nome[c.tipo] || c.tipo)}</span><span class="muted">${esc(fmtHora(c.created_at))}</span>
     <span class="muted">${c.resultado ? esc(c.resultado.erro || Object.entries(c.resultado).map(([k, v]) => `${k}: ${v}`).join(' · ')) : ''}</span></div>`).join('');
@@ -558,6 +559,39 @@ async function atualizarEspelho() {
   espelhoVisto = s.captura_em;
   const { data } = await sb.storage.from(BUCKET).createSignedUrl(s.captura_path, 120);
   if (data) { $('#espelho-img').src = data.signedUrl; $('#espelho-info').textContent = 'Atualizado às ' + fmtHora(s.captura_em); }
+}
+
+// ---------- trocar a conta do WhatsApp (só SUPER_ADMIN) ----------
+// A tela só mostra este cartão para SUPER_ADMIN. Quem garante de verdade é o banco (trigger do 003_*.sql)
+// e o robô, que confere o autor do comando antes de executar. Se o 003 ainda não foi aplicado, a opção some.
+async function verificarSuperAdmin() {
+  let ok = false;
+  try { const { data, error } = await sb.rpc('fn_app_mon_notas_eh_super_admin'); ok = !error && data === true; } catch (_) { ok = false; }
+  const velho = $('#card-troca-conta'); if (velho) velho.remove();
+  if (ok) montarTrocaConta();
+  return ok;
+}
+function montarTrocaConta() {
+  const ancora = $('#card-conexao'); if (!ancora) return;
+  const card = document.createElement('div'); card.className = 'card larga'; card.id = 'card-troca-conta';
+  card.innerHTML = `
+    <h3>Conta do WhatsApp <span class="tag">SUPER_ADMIN</span></h3>
+    <p class="small">Conecta <b>outro número</b> de WhatsApp ao robô. A conta atual fica guardada no computador do robô e pode ser restaurada.</p>
+    <div class="linha quebra">
+      <button class="btn danger" id="btn-trocar-conta">Conectar outra conta</button>
+      <button class="btn" id="btn-restaurar-conta">Voltar à conta anterior</button>
+    </div>
+    <p class="muted small">Depois de pedir, o QR code aparece na caixa <b>Conexão</b> (em até ~1 min). No celular da nova conta: WhatsApp → Aparelhos conectados → Conectar aparelho. Enquanto o QR não for lido, <b>nada é monitorado</b>. A nova conta precisa estar no grupo; se o grupo for outro, escolha-o depois em “Listar meus grupos”.</p>`;
+  ancora.after(card);
+  $('#btn-trocar-conta', card).addEventListener('click', () => {
+    const g = S.config.grupo_alvo;
+    if (!confirm('Conectar OUTRA conta de WhatsApp ao robô?\n\n• O robô para de ler com a conta atual agora.\n• A sessão atual é guardada (dá para voltar).\n• Você precisará ler um QR code com o celular da nova conta.' + (g ? `\n\nGrupo monitorado hoje: ${g.name}` : ''))) return;
+    enviarComando('trocar_conta', { confirmar: true });
+  });
+  $('#btn-restaurar-conta', card).addEventListener('click', () => {
+    if (!confirm('Voltar para a conta de WhatsApp usada antes da última troca?\n\nA conta que está conectada agora também fica guardada.')) return;
+    enviarComando('restaurar_conta', { confirmar: true });
+  });
 }
 
 // ---------- vendedores ----------
