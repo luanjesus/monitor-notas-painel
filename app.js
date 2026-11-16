@@ -14,6 +14,8 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const TZ = 'America/Sao_Paulo';
+// colunas da fila de revisão (sem o JSON completo da nota, que pesa e só é usado em arquivo local)
+const COLS_REVISAO = 'id,msg_id,status,prioridade_revisao,nome,cpf,celular,loja_chave,grupo,vendedor_nome,enviado_em,origem,observacao_complementar,imagem_path,motivos_revisao,erro_mensagem,produto,tipo_documento,valor_total,texto_original,mlc_status,mlc_cliente_id,mlc_erro,mlc_extra,mlc_conferir';
 
 const S = {
   user: null, lojas: [], vendedores: [], config: {}, status: null,
@@ -52,7 +54,7 @@ const media = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
 const tag = (t) => `<span class="tag ${esc(t)}">${esc(String(t).replace('_HUMANA', '').replace('INTERMEDIARIA', 'MÉDIA'))}</span>`;
 // situação do envio ao Minha Loja Conectada (coluna mlc_status; reaproveita as cores das etiquetas)
 const ENVIO = { PENDENTE: ['REVISAO_HUMANA', 'Na fila'], ENVIANDO: ['REVISAO_HUMANA', 'Enviando'], CADASTRADO: ['SUCESSO', 'Cadastrado'], ERRO: ['ERRO', 'Falhou'] };
-const tagEnvio = (n) => { const e = ENVIO[n.mlc_status]; return e ? `<span class="tag ${e[0]}" title="${esc(n.mlc_erro || '')}">${e[1]}</span>` : '<span class="muted">–</span>'; };
+const tagEnvio = (n) => { const e = ENVIO[n.mlc_status]; return e ? `<span class="tag ${e[0]}" title="${esc(n.mlc_erro || '')}">${e[1]}${n.mlc_conferir ? ' · conferir' : ''}</span>` : '<span class="muted">–</span>'; };
 
 // ---------- login ----------
 // Link de recuperação de senha: o Supabase devolve a pessoa para esta página com "type=recovery" no endereço
@@ -134,7 +136,8 @@ async function entrarNoApp(user) {
   montarFiltros(); renderStatus(); renderExec(); renderGrupoCfg(); renderVendedores(); renderGrupos(); renderComandos(); renderLogs();
   await carregarRevisao(); await carregarNotas(); await carregarTempo();
   assinar();
-  setInterval(renderStatus, 5000);
+  setInterval(() => { if (!document.hidden) renderStatus(); }, 5000);
+  iniciarOciosidade();
 }
 
 // ---------- carga de dados ----------
@@ -145,7 +148,7 @@ async function carregarGrupos() { const { data } = await sb.from(T('grupos')).se
 async function carregarComandos() { const { data } = await sb.from(T('comandos')).select('*').order('id', { ascending: false }).limit(6); S.comandos = data || []; }
 async function carregarLogs() { const { data } = await sb.from(T('logs')).select('*').order('id', { ascending: false }).limit(150); S.logs = data || []; }
 async function carregarRevisao() {
-  const { data, error } = await sb.from(T('notas')).select('*').in('status', ['REVISAO_HUMANA', 'ERRO']).order('enviado_em', { ascending: false }).limit(300);
+  const { data, error } = await sb.from(T('notas')).select(COLS_REVISAO).or('status.in.(REVISAO_HUMANA,ERRO),mlc_conferir.eq.true').order('enviado_em', { ascending: false }).limit(300);
   if (error) return toast('Erro ao carregar revisão: ' + error.message, true);
   const peso = { MAXIMA: 0, INTERMEDIARIA: 1, BAIXA: 2 };
   S.revisao = (data || []).sort((a, b) => (peso[a.prioridade_revisao] ?? 3) - (peso[b.prioridade_revisao] ?? 3) || (a.enviado_em < b.enviado_em ? 1 : -1));
@@ -157,13 +160,13 @@ function assinar() {
   sb.channel('app-mon-notas')
     .on('postgres_changes', { event: '*', schema: 'public', table: T('notas') }, (p) => {
       const n = p.new && p.new.id ? p.new : null;
-      if (n && ['REVISAO_HUMANA', 'ERRO'].includes(n.status)) {
+      if (n && (['REVISAO_HUMANA', 'ERRO'].includes(n.status) || n.mlc_conferir)) {
         const i = S.revisao.findIndex(x => x.id === n.id);
         if (i >= 0) S.revisao[i] = n; else { S.revisao.unshift(n); }
       } else if (n) S.revisao = S.revisao.filter(x => x.id !== n.id);
       if (p.eventType === 'DELETE' && p.old) S.revisao = S.revisao.filter(x => x.id !== p.old.id);
       renderRevisao(true);
-      clearTimeout(assinar._t); assinar._t = setTimeout(() => { carregarNotas(); carregarTempo(); }, 1200);
+      clearTimeout(assinar._t); assinar._t = setTimeout(() => { if (!document.hidden) { carregarNotas(); carregarTempo(); } }, 4000);
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: T('status') }, (p) => { S.status = p.new; renderStatus(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: T('grupos') }, () => carregarGrupos().then(renderGrupos))
@@ -229,7 +232,7 @@ function renderRevisao(manterSel) {
   $('#rev-contagem').textContent = n ? `${n} nota(s)` : '';
   $('#rev-lista').innerHTML = n ? S.revisao.map(x => `
     <button class="item ${S.selRev === x.id ? 'sel' : ''}" data-id="${esc(x.id)}">
-      <div class="l1"><strong>${esc(x.nome || (x.status === 'ERRO' ? 'Erro de leitura' : 'Sem nome'))}</strong>${tag(x.prioridade_revisao || x.status)}</div>
+      <div class="l1"><strong>${esc(x.nome || (x.status === 'ERRO' ? 'Erro de leitura' : 'Sem nome'))}</strong>${tag(x.prioridade_revisao || x.status)}${x.mlc_conferir ? '<span class="tag REVISAO_HUMANA">cadastrada: conferir</span>' : ''}</div>
       <div class="l2">${esc(fmtHora(x.enviado_em))} · ${esc(x.vendedor_nome || 'vendedor ?')} · ${esc(lojaNome(x.loja_chave))}</div>
       <div class="l2">${esc((x.motivos_revisao || []).join(', ').replace(/_/g, ' '))}</div>
     </button>`).join('') : '<p class="muted pad">Nada para ajustar. 🎉</p>';
@@ -268,8 +271,9 @@ async function abrirEdicao(n, alvo, aoSalvar) {
       <div class="linha quebra"><strong>${esc(fmtHora(n.enviado_em))}</strong> ${tag(n.status)} ${n.prioridade_revisao ? tag(n.prioridade_revisao) : ''}
         <span class="muted small">${esc(n.vendedor_nome || '')}</span></div>
       ${n.mlc_status ? `<div class="small">Envio ao Minha Loja Conectada: ${tagEnvio(n)} ${esc(n.mlc_erro || '')}${n.mlc_cliente_id ? ' · id ' + esc(n.mlc_cliente_id) : ''}</div>` : ''}
+      ${n.mlc_conferir ? '<div class="small" style="color:var(--err)"><b>Cadastrada automaticamente sem validação.</b> Confira os dados; se corrigir, use “Salvar e recadastrar”. “Salvar como corrigida” só marca como conferida.</div>' : ''}
       <div class="motivos">${(n.motivos_revisao || []).map(m => `<span class="tag">${esc(m.replace(/_/g, ' '))}</span>`).join('')}${n.erro_mensagem ? `<span class="tag ERRO">${esc(n.erro_mensagem)}</span>` : ''}</div>
-      <label>Nome<input name="nome" value="${esc(n.nome || '')}"></label>
+      <label>Nome<input name="nome" value="${esc(n.nome || '')}" placeholder="vazio = cadastrado com caracteres invisíveis"></label>
       <div class="par">
         <label>CPF<input name="cpf" inputmode="numeric" value="${esc(fmtCpf(n.cpf))}" placeholder="000.000.000-00"></label>
         <label>Celular<input name="celular" inputmode="tel" value="${esc(fmtCel(n.celular))}" placeholder="(32) 99999-9999"></label>
@@ -278,12 +282,13 @@ async function abrirEdicao(n, alvo, aoSalvar) {
         <label>Loja<select name="loja_chave">${lojasOpts}</select></label>
         <label>Grupo (produto)<input name="grupo" list="dl-grupos" value="${esc(n.grupo || '')}"><datalist id="dl-grupos">${GRUPOS_PRODUTO.map(g => `<option value="${esc(g)}">`).join('')}</datalist></label>
       </div>
+      ${blocoExtra(n)}
       <label>Informações complementares<textarea name="observacao_complementar" placeholder="Anotações para quem for cadastrar">${esc(n.observacao_complementar || '')}</textarea></label>
       <div class="small muted">Produto lido: <b>${esc(n.produto || '–')}</b> · Documento: ${esc(n.tipo_documento || '–')}${n.valor_total ? ' · R$ ' + Number(n.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}</div>
       ${n.texto_original ? `<details><summary>Texto lido da foto</summary><pre>${esc(n.texto_original)}</pre></details>` : ''}
       <div class="acoes">
         <button class="btn" type="submit" id="btn-salvar-nota">Salvar como corrigida</button>
-        ${(!n.mlc_status || n.mlc_status === 'ERRO') ? '<button class="btn primary" type="submit" id="btn-salvar-cadastrar">Salvar e cadastrar</button>' : ''}
+        ${(!n.mlc_status || ['ERRO', 'CADASTRADO'].includes(n.mlc_status)) ? '<button class="btn primary" type="submit" id="btn-salvar-cadastrar">' + (n.mlc_status === 'CADASTRADO' ? 'Salvar e recadastrar' : 'Salvar e cadastrar') + '</button>' : ''}
         <button class="btn danger" type="button" id="btn-descartar">Não é nota / descartar</button>
         <span id="msg-edicao" class="small"></span>
       </div>
@@ -297,7 +302,7 @@ async function abrirEdicao(n, alvo, aoSalvar) {
   f.elements.celular.addEventListener('blur', () => { f.elements.celular.value = fmtCel(f.elements.celular.value); });
 
   if (n.imagem_path) {
-    const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(n.imagem_path, 3600);
+    const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(n.imagem_path, 600);
     const box = $('#foto-box', alvo);
     if (error || !data) box.innerHTML = '<p class="muted pad">Não foi possível abrir a foto.</p>';
     else {
@@ -321,6 +326,7 @@ async function abrirEdicao(n, alvo, aoSalvar) {
       status: 'CORRIGIDO'
     };
     if (cpf && cpf.length !== 11) return msg('CPF precisa ter 11 dígitos.', true);
+    upd.mlc_extra = lerExtra(f);
     if (cadastrar) {
       const r = motivoNaoCadastra({ status: 'CORRIGIDO', mlc_status: n.mlc_status, cpf, loja_chave: f.elements.loja_chave.value, nome: f.elements.nome.value });
       if (r) return msg('Para cadastrar: ' + r + '.', true);
@@ -328,7 +334,7 @@ async function abrirEdicao(n, alvo, aoSalvar) {
     }
     $$('#btn-salvar-nota, #btn-salvar-cadastrar', alvo).forEach(b => { b.disabled = true; });
     let q = sb.from(T('notas')).update(upd).eq('id', n.id);
-    if (cadastrar) q = q.or('mlc_status.is.null,mlc_status.eq.ERRO').select('id');   // não mexe numa nota que o robô já pegou
+    if (cadastrar) q = q.or('mlc_status.is.null,mlc_status.eq.ERRO,mlc_status.eq.CADASTRADO').select('id');   // não mexe numa nota que o robô já pegou
     const { data: salvo, error } = await q;
     const liberar = () => $$('#btn-salvar-nota, #btn-salvar-cadastrar', alvo).forEach(b => { b.disabled = false; });
     if (error) { liberar(); return msg('Não salvou: ' + error.message, true); }
@@ -350,8 +356,8 @@ function montarFiltros() {
 }
 async function carregarNotas() {
   const de = $('#f-de').value || hojeSP(), ate = $('#f-ate').value || de;
-  let q = sb.from(T('notas')).select('id,msg_id,status,prioridade_revisao,nome,cpf,celular,loja_chave,grupo,vendedor_nome,enviado_em,tempo_cadastro_seg,origem,observacao_complementar,imagem_path,motivos_revisao,erro_mensagem,produto,tipo_documento,valor_total,texto_original,dados_extraidos,mlc_status,mlc_cliente_id,mlc_erro')
-    .gte('enviado_em', inicioDia(de)).lt('enviado_em', fimDia(ate)).order('enviado_em', { ascending: false }).limit(1000);
+  let q = sb.from(T('notas')).select('id,msg_id,status,prioridade_revisao,nome,cpf,celular,loja_chave,grupo,vendedor_nome,enviado_em,tempo_cadastro_seg,origem,observacao_complementar,imagem_path,motivos_revisao,erro_mensagem,produto,tipo_documento,valor_total,mlc_status,mlc_cliente_id,mlc_erro,mlc_extra,mlc_conferir')
+    .gte('enviado_em', inicioDia(de)).lt('enviado_em', fimDia(ate)).order('enviado_em', { ascending: false }).limit(500);
   if ($('#f-status').value) q = q.eq('status', $('#f-status').value);
   const lj = $('#f-loja').value; if (lj === '__sem') q = q.is('loja_chave', null); else if (lj) q = q.eq('loja_chave', lj);
   const { data, error } = await q;
@@ -368,15 +374,17 @@ function renderNotas() {
     <td>${esc(fmtHora(n.enviado_em))}</td><td>${esc(lojaNome(n.loja_chave))}</td><td title="${esc(n.nome || '')}">${esc(n.nome || '–')}</td>
     <td>${esc(fmtCpf(n.cpf) || '–')}</td><td>${esc(fmtCel(n.celular) || '–')}</td><td>${esc(n.grupo || '–')}</td>
     <td>${esc(n.vendedor_nome || '–')}</td><td>${tag(n.status)}</td><td>${tagEnvio(n)}</td><td class="dir">${esc(fmtDur(n.tempo_cadastro_seg))}</td><td class="dir">${botaoCadastrar(n)}</td></tr>`).join('');
-  $('#notas-rodape').textContent = `${l.length} nota(s)` + (S.notas.length >= 1000 ? ' (mostrando as 1000 mais recentes do período)' : '');
+  $('#notas-rodape').textContent = `${l.length} nota(s)` + (S.notas.length >= 500 ? ' (mostrando as 500 mais recentes do período)' : '');
   const nCorr = l.filter(n => n.status === 'CORRIGIDO' && !n.mlc_status).length;
   const bTodas = $('#btn-cadastrar-todas'); bTodas.textContent = nCorr ? `Cadastrar corrigidas (${nCorr})` : 'Cadastrar corrigidas'; bTodas.disabled = !nCorr;
 }
-$('#tab-notas tbody').addEventListener('click', (e) => {
+$('#tab-notas tbody').addEventListener('click', async (e) => {
   const bCad = e.target.closest('[data-cad]');
   if (bCad) { cadastrarUma(S.notas.find(x => x.id === bCad.dataset.cad)); return; }
   const tr = e.target.closest('tr[data-id]'); if (!tr) return;
   const n = S.notas.find(x => x.id === tr.dataset.id); const dlg = $('#dlg-edicao');
+  // a lista não traz o texto lido da foto (pesado): busca só desta nota
+  if (n && n.texto_original === undefined) { const { data: tx } = await sb.from(T('notas')).select('texto_original').eq('id', n.id).maybeSingle(); n.texto_original = tx ? tx.texto_original : null; }
   abrirEdicao(n, $('#dlg-corpo'), () => { dlg.close(); carregarNotas(); });
   dlg.showModal();
 });
@@ -386,7 +394,7 @@ $('#f-busca').addEventListener('input', renderNotas);
 $('#btn-csv').addEventListener('click', () => {
   const l = notasFiltradas();
   const cols = ['enviado_em', 'loja_chave', 'nome', 'cpf', 'celular', 'grupo', 'vendedor_nome', 'status', 'tempo_cadastro_seg', 'observacao_complementar', 'mlc_status', 'mlc_erro'];
-  const cel = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const cel = (v) => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };   // texto que começa com = + - @ viraria fórmula no Excel
   const csv = '﻿' + [cols.join(';'), ...l.map(n => cols.map(c => cel(n[c])).join(';'))].join('\r\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `notas_${$('#f-de').value}_${$('#f-ate').value}.csv`; a.click();
 });
@@ -395,20 +403,20 @@ $('#btn-csv').addEventListener('click', () => {
 // O painel só coloca a nota na fila (mlc_status = PENDENTE). Quem envia à loja é o robô, uma nota de cada vez.
 function motivoNaoCadastra(n) {
   if (!['SUCESSO', 'CORRIGIDO'].includes(n.status)) return 'a nota precisa estar como SUCESSO ou CORRIGIDO';
-  if (n.mlc_status && n.mlc_status !== 'ERRO') return 'já está em "' + (ENVIO[n.mlc_status] || [0, n.mlc_status])[1].toLowerCase() + '"';
+  if (n.mlc_status && !['ERRO', 'CADASTRADO'].includes(n.mlc_status)) return 'já está em "' + (ENVIO[n.mlc_status] || [0, n.mlc_status])[1].toLowerCase() + '"';
   if (!cpfValido(n.cpf)) return 'CPF vazio ou inválido';
   if (!n.loja_chave) return 'falta escolher a loja';
-  if (String(n.nome || '').trim().length < 5) return 'nome vazio ou curto';
+  // nome vazio é aceito: o robô cadastra com caracteres invisíveis
   return '';
 }
 function botaoCadastrar(n) {
-  if (!['SUCESSO', 'CORRIGIDO'].includes(n.status) || (n.mlc_status && n.mlc_status !== 'ERRO')) return '';
-  return `<button class="btn" data-cad="${esc(n.id)}">${n.mlc_status === 'ERRO' ? 'Reenviar' : 'Cadastrar'}</button>`;
+  if (!['SUCESSO', 'CORRIGIDO'].includes(n.status) || (n.mlc_status && !['ERRO', 'CADASTRADO'].includes(n.mlc_status))) return '';
+  return `<button class="btn" data-cad="${esc(n.id)}">${n.mlc_status === 'ERRO' ? 'Reenviar' : n.mlc_status === 'CADASTRADO' ? 'Recadastrar' : 'Cadastrar'}</button>`;
 }
 async function colocarNaFila(lista) {
   // as condições evitam mexer em nota que o robô já está enviando ou que já foi cadastrada
   const { data, error } = await sb.from(T('notas')).update({ mlc_status: 'PENDENTE', mlc_erro: null })
-    .in('id', lista.map(n => n.id)).in('status', ['SUCESSO', 'CORRIGIDO']).or('mlc_status.is.null,mlc_status.eq.ERRO').select('id');
+    .in('id', lista.map(n => n.id)).in('status', ['SUCESSO', 'CORRIGIDO']).or('mlc_status.is.null,mlc_status.eq.ERRO,mlc_status.eq.CADASTRADO').select('id');
   if (error) throw error;
   return (data || []).length;
 }
@@ -417,7 +425,9 @@ async function cadastrarUma(n) {
   if (!n) return;
   const motivo = motivoNaoCadastra(n);
   if (motivo) return toast('Não dá para cadastrar: ' + motivo + '.', true);
-  const txt = n.mlc_status === 'ERRO'
+  const txt = n.mlc_status === 'CADASTRADO'
+    ? 'Esta nota já foi cadastrada (cliente ' + (n.mlc_cliente_id || '?') + '). Recadastrar envia um novo pedido ao sistema da loja, que pode recusar o CPF repetido ou criar um cliente duplicado. Confira lá antes.\n\nRecadastrar mesmo assim?'
+    : n.mlc_status === 'ERRO'
     ? 'Esta nota já falhou no envio. Antes de reenviar, confira no sistema da loja se o cliente não foi criado.\n\nReenviar mesmo assim?'
     : `Cadastrar ${n.nome} em ${lojaNome(n.loja_chave)}?`;
   if (!confirm(txt + avisoRobo())) return;
@@ -585,6 +595,30 @@ $('#btn-novo-vend').addEventListener('click', () => {
 // ---------- registro ----------
 function renderLogs() {
   $('#log-lista').innerHTML = S.logs.map(l => `<div class="${esc(l.nivel === 'erro' ? 'erro' : l.nivel === 'aviso' ? 'aviso' : '')}">${esc(fmtHora(l.created_at))} · ${esc(l.mensagem)}</div>`).join('') || '<span class="muted">Sem registros.</span>';
+}
+
+// Sai da conta depois de IDLE_MIN minutos sem uso (config.js, padrão 30): um computador esquecido logado dá acesso a CPFs.
+let ociosidadeLigada = false;
+function iniciarOciosidade() {
+  if (ociosidadeLigada) return; ociosidadeLigada = true;
+  const lim = (Number(CFG.IDLE_MIN) || 30) * 60000; let ultimo = Date.now();
+  ['click', 'keydown', 'pointerdown', 'touchstart', 'scroll'].forEach(ev => window.addEventListener(ev, () => { ultimo = Date.now(); }, { passive: true, capture: true }));
+  setInterval(async () => { if (Date.now() - ultimo > lim) { try { await sb.auth.signOut(); } finally { location.reload(); } } }, 30000);
+}
+// ao voltar para a aba, atualiza (enquanto ela estava escondida as atualizações ficam em pausa)
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user) { renderStatus(); carregarNotas(); carregarTempo(); } });
+
+// campos opcionais do cadastro no Minha Loja Conectada (guardados em notas.mlc_extra; vazio = não envia)
+const CAMPOS_EXTRA = [['apelido', 'Apelido', 'automático: primeiro + último nome'], ['sexo', 'Sexo', ''], ['nascimento', 'Nascimento (AAAA-MM-DD)', ''], ['email', 'E-mail', ''], ['telefone', 'Telefone', ''], ['cep', 'CEP', ''], ['endereco', 'Endereço', ''], ['numero', 'Número', ''], ['complemento', 'Complemento', ''], ['bairro', 'Bairro', ''], ['cidade', 'Cidade', 'da loja'], ['uf', 'UF', 'da loja'], ['comoConheceu', 'Como conheceu', 'padrão do robô'], ['rg_ie', 'RG / IE', 'ISENTO'], ['obs', 'Observação (obs)', '']];
+function blocoExtra(n) {
+  const x = n.mlc_extra || {};
+  const campos = CAMPOS_EXTRA.map(([k, rot, dica]) => `<label>${esc(rot)}<input name="x_${k}" value="${esc(x[k] || '')}" placeholder="${esc(dica)}" maxlength="300"></label>`);
+  const pares = []; for (let i = 0; i < campos.length; i += 2) pares.push(`<div class="par">${campos[i]}${campos[i + 1] || ''}</div>`);
+  return `<details class="extra" ${Object.keys(x).length ? 'open' : ''}><summary>Todos os dados do cadastro no Minha Loja Conectada</summary><p class="small muted">Campo vazio não é enviado (ou usa o padrão que aparece em cinza). Nome vazio é cadastrado com caracteres invisíveis.</p>${pares.join('')}</details>`;
+}
+function lerExtra(f) {
+  const x = {}; CAMPOS_EXTRA.forEach(([k]) => { const v = f.elements['x_' + k].value.trim(); if (v) x[k] = v; });
+  return Object.keys(x).length ? x : null;
 }
 
 boot().catch(e => { console.error(e); mostrarLogin(); $('#login-erro').textContent = 'Erro ao iniciar: ' + e.message; });
