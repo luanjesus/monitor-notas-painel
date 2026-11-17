@@ -53,7 +53,7 @@ const mediana = (a) => { if (!a.length) return null; const s = [...a].sort((x, y
 const media = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
 const tag = (t) => `<span class="tag ${esc(t)}">${esc(String(t).replace('_HUMANA', '').replace('INTERMEDIARIA', 'MÉDIA'))}</span>`;
 // situação do envio ao Minha Loja Conectada (coluna mlc_status; reaproveita as cores das etiquetas)
-const ENVIO = { PENDENTE: ['REVISAO_HUMANA', 'Na fila'], ENVIANDO: ['REVISAO_HUMANA', 'Enviando'], CADASTRADO: ['SUCESSO', 'Cadastrado'], ERRO: ['ERRO', 'Falhou'] };
+const ENVIO = { PENDENTE: ['REVISAO_HUMANA', 'Na fila'], ENVIANDO: ['REVISAO_HUMANA', 'Enviando'], CADASTRADO: ['SUCESSO', 'Cadastrado'], ERRO: ['ERRO', 'Falhou'], JA_CADASTRADO: ['SUCESSO', 'Já possui cadastro'] };
 const tagEnvio = (n) => { const e = ENVIO[n.mlc_status]; return e ? `<span class="tag ${e[0]}" title="${esc(n.mlc_erro || '')}">${e[1]}${n.mlc_conferir ? ' · conferir' : ''}</span>` : '<span class="muted">–</span>'; };
 
 // ---------- login ----------
