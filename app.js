@@ -340,13 +340,11 @@ async function abrirEdicao(n, alvo, aoSalvar) {
     const liberar = () => $$('#btn-salvar-nota, #btn-salvar-cadastrar', alvo).forEach(b => { b.disabled = false; });
     if (error) { liberar(); return msg('Não salvou: ' + error.message, true); }
     if (cadastrar && !(salvo || []).length) { liberar(); return msg('Esta nota mudou de situação (o robô já a enviou). Feche e atualize a lista.', true); }
-    toast(cadastrar ? 'Nota salva e na fila para cadastro' : 'Nota salva como corrigida'); Object.assign(n, upd); aoSalvar && aoSalvar(n);
+    const vaiSozinha = !cadastrar && !n.mlc_status && cpfValido(cpf) && upd.loja_chave;
+    toast(cadastrar ? 'Nota salva e na fila para cadastro' : vaiSozinha ? 'Nota salva: o robô cadastra sozinho em instantes' : 'Nota salva como corrigida'); Object.assign(n, upd); aoSalvar && aoSalvar(n);
   });
   $('#btn-descartar', alvo).addEventListener('click', async () => {
-    if (!confirm('Descartar esta nota? (ela deixa de aparecer na revisão)')) return;
-    const { error } = await sb.from(T('notas')).update({ status: 'DESCARTADO' }).eq('id', n.id);
-    if (error) return msg('Não descartou: ' + error.message, true);
-    toast('Nota descartada'); n.status = 'DESCARTADO'; aoSalvar && aoSalvar(n);
+    if (await descartarNota(n)) aoSalvar && aoSalvar(n);
   });
 }
 
@@ -374,7 +372,7 @@ function renderNotas() {
   $('#tab-notas tbody').innerHTML = l.map(n => `<tr class="clic" data-id="${esc(n.id)}">
     <td>${esc(fmtHora(n.enviado_em))}</td><td>${esc(lojaNome(n.loja_chave))}</td><td title="${esc(n.nome || '')}">${esc(n.nome || '–')}</td>
     <td>${esc(fmtCpf(n.cpf) || '–')}</td><td>${esc(fmtCel(n.celular) || '–')}</td><td>${esc(n.grupo || '–')}</td>
-    <td>${esc(n.vendedor_nome || '–')}</td><td>${tag(n.status)}</td><td>${tagEnvio(n)}</td><td class="dir">${esc(fmtDur(n.tempo_cadastro_seg))}</td><td class="dir">${botaoCadastrar(n)}</td></tr>`).join('');
+    <td>${esc(n.vendedor_nome || '–')}</td><td>${tag(n.status)}</td><td>${tagEnvio(n)}</td><td class="dir">${esc(fmtDur(n.tempo_cadastro_seg))}</td><td class="dir nowrap">${botaoCadastrar(n)}${botaoDescartar(n)}</td></tr>`).join('');
   $('#notas-rodape').textContent = `${l.length} nota(s)` + (S.notas.length >= 500 ? ' (mostrando as 500 mais recentes do período)' : '');
   const nCorr = l.filter(n => n.status === 'CORRIGIDO' && !n.mlc_status).length;
   const bTodas = $('#btn-cadastrar-todas'); bTodas.textContent = nCorr ? `Cadastrar corrigidas (${nCorr})` : 'Cadastrar corrigidas'; bTodas.disabled = !nCorr;
@@ -382,6 +380,8 @@ function renderNotas() {
 $('#tab-notas tbody').addEventListener('click', async (e) => {
   const bCad = e.target.closest('[data-cad]');
   if (bCad) { cadastrarUma(S.notas.find(x => x.id === bCad.dataset.cad)); return; }
+  const bDesc = e.target.closest('[data-desc]');
+  if (bDesc) { const n = S.notas.find(x => x.id === bDesc.dataset.desc); if (await descartarNota(n)) carregarNotas(); return; }
   const tr = e.target.closest('tr[data-id]'); if (!tr) return;
   const n = S.notas.find(x => x.id === tr.dataset.id); const dlg = $('#dlg-edicao');
   // a lista não traz o texto lido da foto (pesado): busca só desta nota
@@ -413,6 +413,28 @@ function motivoNaoCadastra(n) {
 function botaoCadastrar(n) {
   if (!['SUCESSO', 'CORRIGIDO'].includes(n.status) || (n.mlc_status && !['ERRO', 'CADASTRADO'].includes(n.mlc_status))) return '';
   return `<button class="btn" data-cad="${esc(n.id)}">${n.mlc_status === 'ERRO' ? 'Reenviar' : n.mlc_status === 'CADASTRADO' ? 'Recadastrar' : 'Cadastrar'}</button>`;
+}
+// Descartar: tira a nota do painel e das contagens. Se ela já foi cadastrada, o cliente continua no sistema da loja.
+function botaoDescartar(n) {
+  if (!n || n.status === 'DESCARTADO' || ['PENDENTE', 'ENVIANDO'].includes(n.mlc_status)) return '';
+  return ` <button class="btn danger" data-desc="${esc(n.id)}" title="Descartar esta nota">Descartar</button>`;
+}
+async function descartarNota(n) {
+  if (!n) return false;
+  if (['PENDENTE', 'ENVIANDO'].includes(n.mlc_status)) { toast('Esta nota está sendo enviada agora. Espere terminar para descartar.', true); return false; }
+  const jaNaLoja = ['CADASTRADO', 'JA_CADASTRADO'].includes(n.mlc_status);
+  const txt = jaNaLoja
+    ? `Esta nota já foi cadastrada no sistema da loja${n.mlc_cliente_id ? ' (cliente ' + n.mlc_cliente_id + ')' : ''}.\n\n` +
+      'Descartar aqui só tira a nota do painel e das contagens. O cliente CONTINUA no Minha Loja Conectada; se ele não deveria existir, apague lá também.\n\nDescartar mesmo assim?'
+    : `Descartar a nota de ${n.nome || 'cliente sem nome'}? (ela deixa de aparecer na revisão e não será cadastrada)`;
+  if (!confirm(txt)) return false;
+  const { data, error } = await sb.from(T('notas')).update({ status: 'DESCARTADO' }).eq('id', n.id)
+    .or('mlc_status.is.null,mlc_status.in.(ERRO,CADASTRADO,JA_CADASTRADO)').select('id');
+  if (error) { toast('Não descartou: ' + error.message, true); return false; }
+  if (!(data || []).length) { toast('A nota mudou de situação (o robô está enviando). Atualize a lista.', true); return false; }
+  toast(jaNaLoja ? 'Nota descartada no painel (o cliente continua no sistema da loja)' : 'Nota descartada');
+  n.status = 'DESCARTADO';
+  return true;
 }
 async function colocarNaFila(lista) {
   // as condições evitam mexer em nota que o robô já está enviando ou que já foi cadastrada
