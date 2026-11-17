@@ -351,7 +351,8 @@ async function abrirEdicao(n, alvo, aoSalvar) {
 // ---------- notas ----------
 function montarFiltros() {
   $('#f-loja').innerHTML = '<option value="">Todas</option><option value="__sem">Sem loja</option>' + S.lojas.map(l => `<option value="${esc(l.chave)}">${esc(lojaNome(l.chave))}</option>`).join('');
-  $('#f-de').value = $('#f-ate').value = $('#t-dia').value = hojeSP();
+  $('#f-de').value = $('#f-ate').value = hojeSP();
+  montarFiltrosDash();
 }
 async function carregarNotas() {
   const de = $('#f-de').value || hojeSP(), ate = $('#f-ate').value || de;
@@ -477,39 +478,221 @@ async function cadastrarCorrigidas() {
 }
 $('#btn-cadastrar-todas').addEventListener('click', cadastrarCorrigidas);
 
-// ---------- tempo ----------
-async function carregarTempo() {
-  const dia = $('#t-dia').value || hojeSP();
-  const { data, error } = await sb.from(T('notas')).select('enviado_em,processado_em,tempo_cadastro_seg,loja_chave,status')
-    .gte('enviado_em', inicioDia(dia)).lt('enviado_em', fimDia(dia)).neq('status', 'DESCARTADO').order('enviado_em').limit(5000);
-  if (error) return toast('Erro no tempo: ' + error.message, true);
-  renderTempo(data || []);
-}
+// ---------- dashboard (aba "Dashboard") ----------
+// Filtros: período, loja, grupo e vendedor. Mostra volume, resultado da leitura (sucesso, corrigida, revisão,
+// erro, descartada), envio ao Minha Loja Conectada, tempos e as quebras por loja, vendedor, grupo, motivo,
+// tipo de documento e forma de envio. Os gráficos são SVG simples (sem biblioteca).
+const ST = ['SUCESSO', 'CORRIGIDO', 'REVISAO_HUMANA', 'DESCARTADO', 'ERRO'];      // ordem da pilha (cores conferidas para daltonismo)
+const ST_NOME = { SUCESSO: 'Sucesso automático', CORRIGIDO: 'Corrigida', REVISAO_HUMANA: 'Aguardando revisão', DESCARTADO: 'Descartada', ERRO: 'Erro de leitura' };
+const FORMATO_NOME = { foto: 'Foto', foto_documento: 'Foto como documento', pdf_texto: 'PDF com texto', pdf_pagina_ocr: 'PDF digitalizado', pdf_imagem_ocr: 'PDF digitalizado', texto: 'Mensagem de texto' };
+const DOC_NOME = { NFCE: 'NFC-e (cupom)', DANFE_NFE: 'DANFE (NF-e)', MAGALU_COMPROVANTE: 'Comprovante Magalu', TEXTO_WHATSAPP: 'Texto no WhatsApp' };
+const D = { dados: [], carregadoEm: 0, sujo: true };
+const corSt = (s) => `var(--st-${s})`;
+const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '–';
+const diaSP = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(iso));
 function horaSP(iso) { return +new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hour12: false }).format(new Date(iso)) % 24; }
-function renderTempo(l) {
-  const tempos = l.map(n => +n.tempo_cadastro_seg).filter(x => isFinite(x) && x >= 0);
-  const ts = l.map(n => new Date(n.enviado_em).getTime()).sort((a, b) => a - b);
-  const gaps = []; for (let i = 1; i < ts.length; i++) gaps.push((ts[i] - ts[i - 1]) / 1000);
-  const horasAtivas = new Set(l.map(n => horaSP(n.enviado_em))).size;
-  const ult = l.length ? l[l.length - 1].processado_em : null;
-  const c = (v, r) => `<div class="cartao"><div class="v">${v}</div><div class="r">${r}</div></div>`;
-  $('#t-cartoes').innerHTML =
-    c(l.length, 'notas no dia') + c(fmtDur(media(tempos)), 'tempo médio até cadastrar') + c(fmtDur(mediana(tempos)), 'mediana (metade foi mais rápido)') +
-    c(fmtDur(Math.max(0, ...tempos)), 'mais demorada') + c(gaps.length ? fmtDur(media(gaps)) : '–', 'intervalo médio entre notas') +
-    c(horasAtivas ? (l.length / horasAtivas).toFixed(1) : '–', 'notas por hora (horas com movimento)') +
-    c(ult ? fmtHora(ult).slice(-8) : '–', 'último cadastro');
-  const porHora = Array.from({ length: 24 }, () => []);
-  l.forEach(n => porHora[horaSP(n.enviado_em)].push(+n.tempo_cadastro_seg));
-  const max = Math.max(1, ...porHora.map(a => a.length));
-  $('#t-grafico').innerHTML = `<svg viewBox="0 0 480 130" width="100%" role="img" aria-label="Notas por hora">` +
-    porHora.map((a, h) => { const alt = a.length / max * 90; return `<rect class="graf-barra" x="${h * 20 + 3}" y="${105 - alt}" width="14" height="${alt}" rx="2"><title>${h}h: ${a.length} nota(s)</title></rect>` +
-      (a.length ? `<text class="graf-eixo" x="${h * 20 + 10}" y="${101 - alt}" text-anchor="middle">${a.length}</text>` : '') +
-      `<text class="graf-eixo" x="${h * 20 + 10}" y="120" text-anchor="middle">${h}</text>`; }).join('') + '</svg>';
-  $('#t-horas tbody').innerHTML = porHora.map((a, h) => a.length ? `<tr><td>${h}h</td><td class="dir">${a.length}</td><td class="dir">${fmtDur(media(a))}</td><td class="dir">${fmtDur(mediana(a))}</td><td class="dir">${fmtDur(Math.max(...a))}</td></tr>` : '').join('') || '<tr><td colspan="5" class="muted">Sem notas neste dia.</td></tr>';
-  const lojas = {}; l.forEach(n => (lojas[n.loja_chave || '__sem'] ||= []).push(+n.tempo_cadastro_seg));
-  $('#t-lojas tbody').innerHTML = Object.entries(lojas).map(([k, a]) => `<tr><td>${esc(k === '__sem' ? 'Sem loja' : lojaNome(k))}</td><td class="dir">${a.length}</td><td class="dir">${fmtDur(media(a))}</td><td class="dir">${fmtDur(mediana(a))}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Sem notas neste dia.</td></tr>';
+const somaDias = (d, n) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(new Date(d + 'T12:00:00-03:00').getTime() + n * 86400000));
+
+function montarFiltrosDash() {
+  $('#d-de').value = $('#d-ate').value = hojeSP();
+  $('#d-loja').innerHTML = '<option value="">Todas</option><option value="__sem">Sem loja</option>' + S.lojas.map(l => `<option value="${esc(l.chave)}">${esc(lojaNome(l.chave))}</option>`).join('');
+  $('#d-grupo').innerHTML = '<option value="">Todos</option><option value="__sem">Sem grupo</option>' + GRUPOS_PRODUTO.map(g => `<option>${esc(g)}</option>`).join('');
+  const vends = [...new Set(S.vendedores.map(v => v.nome))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  $('#d-vend').innerHTML = '<option value="">Todos</option>' + vends.map(v => `<option>${esc(v)}</option>`).join('');
+  marcarPreset(0);
 }
-$('#btn-tempo').addEventListener('click', carregarTempo);
+function marcarPreset(dias) { $$('#d-presets .btn').forEach(b => b.classList.toggle('sel', dias !== null && +b.dataset.dias === dias)); }
+$('#d-presets').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-dias]'); if (!b) return;
+  const hoje = hojeSP(); $('#d-ate').value = hoje; $('#d-de').value = somaDias(hoje, -(+b.dataset.dias));
+  marcarPreset(+b.dataset.dias); carregarTempo(true);
+});
+['#d-de', '#d-ate'].forEach(s => $(s).addEventListener('change', () => marcarPreset(null)));
+['#d-loja', '#d-grupo', '#d-vend'].forEach(s => $(s).addEventListener('change', () => renderDash()));
+$('#btn-dash').addEventListener('click', () => carregarTempo(true));
+// a aba só busca dados quando está aberta (a lista muda a todo momento pelo tempo real)
+$('#abas').addEventListener('click', (e) => { const b = e.target.closest('button[data-aba="tempo"]'); if (b && D.sujo) carregarTempo(true); });
+
+// Busca o período inteiro em páginas de 1000 (limite do banco por consulta)
+async function carregarTempo(forcar = false) {
+  if ($('#aba-tempo').hidden && !forcar) { D.sujo = true; return; }
+  if (!$('#d-de').value) montarFiltrosDash();
+  const de = $('#d-de').value || hojeSP(), ate = $('#d-ate').value || de;
+  if (de > ate) return toast('A data inicial é depois da final.', true);
+  $('#d-info').textContent = 'Carregando…';
+  const cols = 'id,status,loja_chave,grupo,vendedor_nome,enviado_em,processado_em,editado_em,tempo_cadastro_seg,mlc_status,motivos_revisao,tipo_documento,valor_total,origem,formato:dados_extraidos->origem->>formato';
+  const todos = [];
+  for (let off = 0; off < 30000; off += 1000) {
+    let q = sb.from(T('notas')).select(cols).gte('enviado_em', inicioDia(de)).lt('enviado_em', fimDia(ate)).order('enviado_em').range(off, off + 999);
+    const { data, error } = await q;
+    if (error) { $('#d-info').textContent = ''; return toast('Erro no dashboard: ' + error.message, true); }
+    todos.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  D.dados = todos; D.de = de; D.ate = ate; D.sujo = false; D.carregadoEm = Date.now();
+  renderDash();
+}
+
+function filtradosDash() {
+  const lj = $('#d-loja').value, gr = $('#d-grupo').value, vd = $('#d-vend').value;
+  return D.dados.filter(n =>
+    (!lj || (lj === '__sem' ? !n.loja_chave : n.loja_chave === lj)) &&
+    (!gr || (gr === '__sem' ? !n.grupo : n.grupo === gr)) &&
+    (!vd || n.vendedor_nome === vd));
+}
+
+// resumo de um conjunto de notas (usado nos cartões e em cada linha das tabelas)
+function resumo(l) {
+  const c = Object.fromEntries(ST.map(s => [s, 0])); l.forEach(n => { c[n.status] = (c[n.status] || 0) + 1; });
+  const repetidas = l.filter(n => n.status === 'DESCARTADO' && (n.motivos_revisao || []).includes('foto_repetida')).length;
+  const validas = l.length - c.DESCARTADO;
+  const mlc = {}; l.forEach(n => { if (n.mlc_status) mlc[n.mlc_status] = (mlc[n.mlc_status] || 0) + 1; });
+  const tLeitura = l.map(n => +n.tempo_cadastro_seg).filter(x => isFinite(x) && x >= 0);
+  const tCorr = l.filter(n => n.status === 'CORRIGIDO' && n.editado_em && n.processado_em)
+    .map(n => (new Date(n.editado_em) - new Date(n.processado_em)) / 1000).filter(x => x >= 0);
+  const valor = l.filter(n => n.status !== 'DESCARTADO').reduce((s, n) => s + (+n.valor_total || 0), 0);
+  return { total: l.length, c, validas, repetidas, mlc, tLeitura, tCorr, valor };
+}
+
+function renderDash() {
+  const l = filtradosDash(), r = resumo(l);
+  const periodo = D.de === D.ate ? fmtDia(D.de) : `${fmtDia(D.de)} a ${fmtDia(D.ate)}`;
+  $('#d-info').textContent = `${periodo} · ${l.length} nota(s)` + (l.length !== D.dados.length ? ` de ${D.dados.length} no período` : '');
+  const cart = (v, rot, sub = '', cls = '') => `<div class="cartao ${cls}"><div class="v">${v}</div><div class="r">${rot}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+  const acerto = r.validas ? r.c.SUCESSO / r.validas : 0;
+  $('#d-cartoes').innerHTML =
+    cart(r.validas, 'notas válidas', r.c.DESCARTADO ? `+ ${r.c.DESCARTADO} descartada(s)${r.repetidas ? `, ${r.repetidas} foto(s) repetida(s)` : ''}` : '') +
+    cart(pct(r.c.SUCESSO, r.validas), 'acerto automático', `${r.c.SUCESSO} lida(s) sem ajuste`, acerto >= 0.7 ? 'ok' : acerto >= 0.4 ? 'alerta' : 'ruim') +
+    cart(pct(r.c.CORRIGIDO, r.validas), 'corrigidas por pessoa', `${r.c.CORRIGIDO} nota(s)`) +
+    cart(r.c.REVISAO_HUMANA, 'aguardando revisão', '', r.c.REVISAO_HUMANA ? 'alerta' : '') +
+    cart(r.c.ERRO, 'erros de leitura', '', r.c.ERRO ? 'ruim' : '') +
+    cart(fmtDur(mediana(r.tLeitura)), 'tempo até o painel (mediana)', r.tLeitura.length ? `média ${fmtDur(media(r.tLeitura))} · máx. ${fmtDur(Math.max(...r.tLeitura))}` : '') +
+    cart(fmtDur(mediana(r.tCorr)), 'tempo até a correção (mediana)', r.tCorr.length ? `${r.tCorr.length} correção(ões)` : 'sem correções');
+  const m = r.mlc;
+  $('#d-cartoes-mlc').innerHTML =
+    cart(m.CADASTRADO || 0, 'cadastradas no Minha Loja Conectada', pct(m.CADASTRADO || 0, r.validas) + ' das válidas', 'ok') +
+    cart(m.JA_CADASTRADO || 0, 'já possuíam cadastro', 'não enviadas de novo') +
+    cart((m.PENDENTE || 0) + (m.ENVIANDO || 0), 'na fila de envio') +
+    cart(m.ERRO || 0, 'falhas de envio', m.ERRO ? 'veja a coluna Envio na aba Notas' : '', m.ERRO ? 'ruim' : '') +
+    cart(l.filter(n => ['SUCESSO', 'CORRIGIDO'].includes(n.status) && !n.mlc_status).length, 'válidas ainda não enviadas', 'sem CPF/loja ou aguardando o robô') +
+    cart(r.valor ? 'R$ ' + r.valor.toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : '–', 'valor das notas lidas', 'notas sem valor lido não entram');
+
+  // série temporal: por dia (período) ou por hora (um dia só)
+  const porHora = D.de === D.ate;
+  const chaves = porHora ? Array.from({ length: 24 }, (_, h) => h) : (() => { const a = []; for (let d = D.de; d <= D.ate; d = somaDias(d, 1)) a.push(d); return a; })();
+  const grupos = new Map(chaves.map(k => [k, []]));
+  l.forEach(n => { const k = porHora ? horaSP(n.enviado_em) : diaSP(n.enviado_em); if (grupos.has(k)) grupos.get(k).push(n); });
+  const rot = (k) => porHora ? `${k}h` : fmtDia(k).slice(0, 5);
+  $('#d-tit-status').textContent = porHora ? 'Notas por hora e resultado da leitura' : 'Notas por dia e resultado da leitura';
+  $('#d-tit-tempo').textContent = (porHora ? 'Tempo até a nota aparecer no painel, por hora' : 'Tempo até a nota aparecer no painel, por dia') + ' (mediana)';
+  $('#d-legenda').innerHTML = ST.map(s => `<span><i style="background:${corSt(s)}"></i>${ST_NOME[s]}</span>`).join('');
+  const cortar = porHora ? chaves.filter(k => grupos.get(k).length).concat([]) : chaves;
+  const visiveis = porHora && cortar.length ? chaves.slice(Math.min(...cortar), Math.max(...cortar) + 1) : chaves;
+  graficoPilha($('#d-graf-status'), visiveis.map(k => ({ rot: rot(k), titulo: porHora ? `${k}h` : fmtDia(k), partes: ST.map(s => ({ s, v: grupos.get(k).filter(n => n.status === s).length })) })));
+  graficoBarras($('#d-graf-tempo'), visiveis.map(k => {
+    const t = grupos.get(k).map(n => +n.tempo_cadastro_seg).filter(x => isFinite(x) && x >= 0);
+    return { rot: rot(k), titulo: porHora ? `${k}h` : fmtDia(k), v: mediana(t), extra: t.length ? `${t.length} nota(s) · média ${fmtDur(media(t))}` : 'sem notas' };
+  }));
+
+  // tabelas
+  const cab = (cols) => `<thead><tr>${cols.map(([t, d]) => `<th${d ? ' class="dir"' : ''}>${t}</th>`).join('')}</tr></thead>`;
+  const quebra = (alvo, chave, nomeDe, extraCols = []) => {
+    const mapa = new Map(); l.forEach(n => { const k = chave(n) ?? '__sem'; if (!mapa.has(k)) mapa.set(k, []); mapa.get(k).push(n); });
+    const linhas = [...mapa].map(([k, a]) => ({ k, a, r: resumo(a) })).sort((x, y) => y.r.validas - x.r.validas || y.r.total - x.r.total);
+    $(alvo).innerHTML = cab([['', 0], ['Notas', 1], ['Acerto auto.', 1], ['Corrigidas', 1], ['Revisão', 1], ['Descart.', 1], ['Cadastradas', 1], ['Tempo (med.)', 1], ...extraCols.map(c => [c.t, 1])]) + '<tbody>' +
+      (linhas.map(({ k, a, r: x }) => `<tr><td title="${esc(nomeDe(k))}">${esc(nomeDe(k))}</td><td class="dir">${x.validas}</td>
+        <td class="dir"><span class="barrinha" style="width:${Math.round((x.validas ? x.c.SUCESSO / x.validas : 0) * 40)}px"></span>${pct(x.c.SUCESSO, x.validas)}</td>
+        <td class="dir">${pct(x.c.CORRIGIDO, x.validas)}</td><td class="dir">${x.c.REVISAO_HUMANA || '–'}</td><td class="dir">${x.c.DESCARTADO || '–'}</td>
+        <td class="dir">${(x.mlc.CADASTRADO || 0) + (x.mlc.JA_CADASTRADO || 0) || '–'}</td><td class="dir">${fmtDur(mediana(x.tLeitura))}</td>
+        ${extraCols.map(c => `<td class="dir">${c.v(a, x)}</td>`).join('')}</tr>`).join('') || '<tr><td colspan="9" class="muted">Sem notas no filtro.</td></tr>') + '</tbody>';
+  };
+  quebra('#d-lojas', n => n.loja_chave, k => k === '__sem' ? 'Sem loja' : lojaNome(k));
+  quebra('#d-vendedores', n => n.vendedor_nome, k => k === '__sem' ? 'Sem vendedor' : k);
+  quebra('#d-grupos', n => n.grupo, k => k === '__sem' ? 'Sem grupo' : k, [{ t: 'Valor', v: (a, x) => x.valor ? 'R$ ' + x.valor.toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : '–' }]);
+  quebra('#d-docs', n => n.tipo_documento, k => k === '__sem' ? 'Não reconhecido' : (DOC_NOME[k] || k));
+  quebra('#d-formatos', n => n.formato || (n.origem === 'texto' ? 'texto' : 'foto'), k => FORMATO_NOME[k] || k);
+
+  // motivos de revisão (notas que precisaram de gente: corrigidas, em revisão, descartadas)
+  const mot = new Map(); let comMotivo = 0;
+  l.filter(n => ['CORRIGIDO', 'REVISAO_HUMANA', 'DESCARTADO', 'ERRO'].includes(n.status)).forEach(n => {
+    const ms = n.motivos_revisao || []; if (ms.length) comMotivo++;
+    ms.forEach(m => mot.set(m, (mot.get(m) || 0) + 1));
+  });
+  const MOT = { cpf_ausente: 'CPF não lido', cpf_invalido_ou_divergente: 'CPF inválido/divergente', nome_ausente: 'Nome não lido', nome_suspeito: 'Nome suspeito',
+    nome_curto: 'Nome curto', loja_nao_identificada: 'Loja não identificada', nota_nao_reconhecida: 'Foto não reconhecida como nota', erro_de_processamento: 'Erro no robô',
+    consumidor_nao_identificado: 'Consumidor não identificado', foto_repetida: 'Foto repetida' };
+  const maxM = Math.max(1, ...mot.values());
+  $('#d-motivos').innerHTML = cab([['Motivo', 0], ['Notas', 1], ['% das que precisaram de ajuste', 1]]) + '<tbody>' +
+    ([...mot].sort((a, b) => b[1] - a[1]).map(([m, v]) => `<tr><td>${esc(MOT[m] || m.replace(/_/g, ' '))}</td><td class="dir"><span class="barrinha" style="background:var(--st-REVISAO_HUMANA);width:${Math.round(v / maxM * 40)}px"></span>${v}</td><td class="dir">${pct(v, comMotivo)}</td></tr>`).join('') ||
+      '<tr><td colspan="3" class="muted">Nenhuma nota precisou de ajuste. 🎉</td></tr>') + '</tbody>';
+}
+const fmtDia = (d) => d ? d.split('-').reverse().join('/') : '';
+
+// ----- gráficos SVG -----
+const tip = () => $('#d-tip');
+function mostrarTip(ev, html) { const t = tip(); t.innerHTML = html; t.hidden = false; moverTip(ev); }
+function moverTip(ev) { const t = tip(); const x = Math.min(ev.clientX + 14, innerWidth - t.offsetWidth - 8), y = Math.min(ev.clientY + 14, innerHeight - t.offsetHeight - 8); t.style.left = x + 'px'; t.style.top = y + 'px'; }
+function esconderTip() { tip().hidden = true; }
+function escala(max) { const passos = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000]; const p = passos.find(x => max / x <= 5) || Math.ceil(max / 5); return { topo: Math.max(p, Math.ceil(max / p) * p), passo: p }; }
+function eixoY(topo, passo, W, H, M, fmt = (v) => v) {
+  let s = ''; for (let v = 0; v <= topo; v += passo) { const y = M.t + (H - M.t - M.b) * (1 - v / topo); s += `<line class="grade-y" x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}"/><text class="eixo" x="${M.l - 6}" y="${y + 3}" text-anchor="end">${fmt(v)}</text>`; }
+  return s;
+}
+function rotulosX(itens, W, M, H) {
+  const n = itens.length, larg = (W - M.l - M.r) / n, pular = Math.ceil(n / 16);
+  return itens.map((it, i) => i % pular ? '' : `<text class="eixo" x="${M.l + larg * (i + .5)}" y="${H - 6}" text-anchor="middle">${esc(it.rot)}</text>`).join('');
+}
+// barras empilhadas por status, com espaço de 2px entre os pedaços e cantos arredondados só no topo
+function graficoPilha(alvo, itens) {
+  const W = 760, H = 230, M = { t: 14, r: 8, b: 24, l: 34 };
+  const tot = itens.map(it => it.partes.reduce((s, p) => s + p.v, 0));
+  if (!tot.some(Boolean)) { alvo.innerHTML = '<p class="muted pad">Sem notas no filtro.</p>'; return; }
+  const { topo, passo } = escala(Math.max(...tot));
+  const larg = (W - M.l - M.r) / itens.length, bw = Math.max(4, Math.min(28, larg * 0.62)), alt = H - M.t - M.b;
+  let s = eixoY(topo, passo, W, H, M);
+  itens.forEach((it, i) => {
+    const x = M.l + larg * i + (larg - bw) / 2; let y = M.t + alt;
+    const partes = it.partes.filter(p => p.v);
+    partes.forEach((p, j) => {
+      const h = p.v / topo * alt; y -= h;
+      const r = j === partes.length - 1 ? Math.min(4, h / 2, bw / 2) : 0;
+      s += r ? `<path class="seg" fill="${corSt(p.s)}" d="M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + bw - r}Q${x + bw},${y} ${x + bw},${y + r}V${y + h}Z"/>`
+             : `<rect class="seg" fill="${corSt(p.s)}" x="${x}" y="${y}" width="${bw}" height="${h}"/>`;
+    });
+    if (tot[i] && itens.length <= 31) s += `<text class="rotulo" x="${x + bw / 2}" y="${y - 4}" text-anchor="middle">${tot[i]}</text>`;
+    s += `<rect class="alvo" data-i="${i}" x="${M.l + larg * i}" y="${M.t}" width="${larg}" height="${alt}"/>`;
+  });
+  s += rotulosX(itens, W, M, H);
+  alvo.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Notas e resultado da leitura">${s}</svg>`;
+  alvo.querySelectorAll('.alvo').forEach(el => {
+    const it = itens[+el.dataset.i], t = tot[+el.dataset.i];
+    const html = `<b>${esc(it.titulo)} · ${t} nota(s)</b>` + it.partes.filter(p => p.v).reverse().map(p => `<div><span><i style="background:${corSt(p.s)}"></i>${ST_NOME[p.s]}</span><span>${p.v} (${pct(p.v, t)})</span></div>`).join('');
+    el.addEventListener('mouseenter', (ev) => mostrarTip(ev, html)); el.addEventListener('mousemove', moverTip); el.addEventListener('mouseleave', esconderTip);
+  });
+}
+// barras simples (uma série: tempo mediano)
+function graficoBarras(alvo, itens) {
+  const W = 760, H = 200, M = { t: 14, r: 8, b: 24, l: 44 };
+  const vals = itens.map(it => it.v || 0);
+  if (!vals.some(Boolean)) { alvo.innerHTML = '<p class="muted pad">Sem notas no filtro.</p>'; return; }
+  const maxMin = Math.max(...vals) / 60, emMin = maxMin >= 2;
+  const { topo, passo } = escala(emMin ? maxMin : Math.max(...vals));
+  const larg = (W - M.l - M.r) / itens.length, bw = Math.max(4, Math.min(28, larg * 0.62)), alt = H - M.t - M.b;
+  let s = eixoY(topo, passo, W, H, M, v => emMin ? v + 'min' : v + 's');
+  itens.forEach((it, i) => {
+    const v = (it.v || 0) / (emMin ? 60 : 1), h = v / topo * alt, x = M.l + larg * i + (larg - bw) / 2, y = M.t + alt - h, r = Math.min(4, h / 2, bw / 2);
+    if (h > 0) s += `<path fill="var(--acc)" d="M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + bw - r}Q${x + bw},${y} ${x + bw},${y + r}V${y + h}Z"/>`;
+    s += `<rect class="alvo" data-i="${i}" x="${M.l + larg * i}" y="${M.t}" width="${larg}" height="${alt}"/>`;
+  });
+  s += rotulosX(itens, W, M, H);
+  alvo.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tempo mediano até o painel">${s}</svg>`;
+  alvo.querySelectorAll('.alvo').forEach(el => {
+    const it = itens[+el.dataset.i];
+    const html = `<b>${esc(it.titulo)}</b><div><span>Mediana</span><span>${fmtDur(it.v)}</span></div><div><span>${esc(it.extra)}</span></div>`;
+    el.addEventListener('mouseenter', (ev) => mostrarTip(ev, html)); el.addEventListener('mousemove', moverTip); el.addEventListener('mouseleave', esconderTip);
+  });
+}
+
 
 // ---------- WhatsApp: conexão, grupo, descoberta, janela ----------
 function renderConexao() {

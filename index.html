@@ -76,7 +76,7 @@
   <nav class="abas" id="abas">
     <button data-aba="revisao" class="ativa">Revisão <span class="badge" id="badge-revisao">0</span></button>
     <button data-aba="notas">Notas</button>
-    <button data-aba="tempo">Tempo</button>
+    <button data-aba="tempo">Dashboard</button>
     <button data-aba="whatsapp">WhatsApp e grupo</button>
     <button data-aba="vendedores">Vendedores</button>
     <button data-aba="log">Registro</button>
@@ -120,16 +120,29 @@
   <!-- TEMPO -->
   <section id="aba-tempo" class="aba" hidden>
     <div class="card filtros">
-      <label>Dia<input type="date" id="t-dia"></label>
-      <button class="btn" id="btn-tempo">Atualizar</button>
-      <span class="muted small">Tempo = da mensagem no WhatsApp até a nota ficar cadastrada.</span>
+      <div class="presets" id="d-presets" role="group" aria-label="Período">
+        <button class="btn" data-dias="0">Hoje</button><button class="btn" data-dias="6">7 dias</button><button class="btn" data-dias="29">30 dias</button>
+      </div>
+      <label>De<input type="date" id="d-de"></label>
+      <label>Até<input type="date" id="d-ate"></label>
+      <label>Loja<select id="d-loja"></select></label>
+      <label>Grupo<select id="d-grupo"></select></label>
+      <label>Vendedor<select id="d-vend"></select></label>
+      <button class="btn primary" id="btn-dash">Atualizar</button>
+      <span class="muted small" id="d-info"></span>
     </div>
-    <div class="cartoes" id="t-cartoes"></div>
-    <div class="card"><h3>Notas por hora</h3><div id="t-grafico"></div></div>
-    <div class="duas-col eq">
-      <div class="card tabela-wrap"><h3>Por hora</h3><table class="tabela" id="t-horas"><thead><tr><th>Hora</th><th class="dir">Notas</th><th class="dir">Média</th><th class="dir">Mediana</th><th class="dir">Máx.</th></tr></thead><tbody></tbody></table></div>
-      <div class="card tabela-wrap"><h3>Por loja</h3><table class="tabela" id="t-lojas"><thead><tr><th>Loja</th><th class="dir">Notas</th><th class="dir">Média</th><th class="dir">Mediana</th></tr></thead><tbody></tbody></table></div>
-    </div>
+    <div class="cartoes" id="d-cartoes"></div>
+    <div class="cartoes" id="d-cartoes-mlc"></div>
+    <div class="card"><div class="linha quebra entre"><h3 id="d-tit-status">Notas por dia e resultado da leitura</h3><div class="legenda" id="d-legenda"></div></div><div class="graf" id="d-graf-status"></div></div>
+    <div class="card"><h3 id="d-tit-tempo">Tempo até a nota aparecer no painel (mediana)</h3><div class="graf" id="d-graf-tempo"></div>
+      <p class="muted small">Tempo = da mensagem no WhatsApp até o robô gravar a nota. A correção humana é medida à parte, nos cartões acima.</p></div>
+    <div class="card tabela-wrap"><h3>Por loja</h3><table class="tabela" id="d-lojas"></table></div>
+    <div class="card tabela-wrap"><h3>Por vendedor</h3><table class="tabela" id="d-vendedores"></table></div>
+    <div class="card tabela-wrap"><h3>Por grupo (produto)</h3><table class="tabela" id="d-grupos"></table></div>
+    <div class="card tabela-wrap"><h3>Por tipo de documento</h3><table class="tabela" id="d-docs"></table></div>
+    <div class="card tabela-wrap"><h3>Por forma de envio</h3><table class="tabela" id="d-formatos"></table></div>
+    <div class="card tabela-wrap"><h3>Por que foram para revisão</h3><table class="tabela" id="d-motivos"></table></div>
+    <div id="d-tip" class="tip" hidden></div>
   </section>
 
   <!-- WHATSAPP -->
